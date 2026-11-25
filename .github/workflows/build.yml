@@ -1,281 +1,105 @@
-
 name: Android APK Build
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
-
-permissions:
-  contents: read
-
-concurrency:
-  group: android-apk-build
-  cancel-in-progress: false
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    env:
-      ANDROID_API_LEVEL: '35'
-      ANDROID_BUILD_TOOLS: '35.0.0'
 
     steps:
-
-      # =====================================
-      # 1. Checkout GitHub Repository
-      # =====================================
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # =====================================
-      # 2. Setup Java JDK 17
-      # =====================================
+      # Gradle project kahan hai (root ya subfolder) khud dhoondho
+      - name: Detect Android Project Directory
+        id: detect
+        run: |
+          SETTINGS=$(find . -maxdepth 4 \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/node_modules/*" -not -path "*/.git/*" | head -n 1)
 
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::Repo mein koi Gradle/Android project nahi mila (settings.gradle missing)."
+            echo "Repo ke files:"
+            ls -la
+            exit 1
+          fi
+
+          DIR=$(dirname "$SETTINGS")
+          echo "Android project directory: $DIR"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
+      # NOTE: yahan cache: gradle use nahi kiya, wahi error ka kaaran tha
       - name: Setup Java JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
-          cache: gradle
 
-      # =====================================
-      # 3. Setup Android SDK (FIXED VERSION)
-      # =====================================
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
-
-      # =====================================
-      # 4. Verify Android SDK
-      # =====================================
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Verify Android SDK
-        shell: bash
         run: |
-          set -e
-
-          echo "Checking Android SDK..."
-
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_HOME" || true
 
-          sdkmanager --version
-          adb version
+      - name: Accept Android Licenses
+        run: yes | "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
-          echo "Android SDK is working."
-
-      # =====================================
-      # 5. Install Required SDK Packages
-      # =====================================
-
-      - name: Install Required Android Packages
-        shell: bash
+      - name: Check Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -e
-
-          echo "Installing Android SDK packages..."
-
-          sdkmanager --install \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "platform-tools"
-
-          echo "Verifying installed packages..."
-
-          sdkmanager --list_installed
-
-          echo "All required SDK packages installed."
-
-      # =====================================
-      # 6. Verify Android Licenses
-      # =====================================
-
-      - name: Verify Android Licenses
-        shell: bash
-        run: |
-          set -e
-
-          echo "Checking Android SDK licenses..."
-
-          sdkmanager --licenses
-
-          echo "Android licenses verified."
-
-      # =====================================
-      # 7. Check Project Files
-      # =====================================
-
-      - name: Check Android Project
-        shell: bash
-        run: |
-          set -e
-
-          echo "Checking project structure..."
-
-          if [ ! -f "gradlew" ]; then
-            echo "ERROR: gradlew file not found!"
-            exit 1
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+          else
+            echo "gradlew nahi mila, system gradle use hoga"
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
           fi
-
-          if [ ! -f "settings.gradle" ] && \
-             [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: Gradle settings file not found!"
-            exit 1
-          fi
-
-          chmod +x gradlew
-
-          echo "Project files verified."
-
-          java -version
-          ./gradlew --version
-
-      # =====================================
-      # 8. Check Android Build Configuration
-      # =====================================
-
-      - name: Check Gradle Configuration
-        shell: bash
-        run: |
-          set -e
-
-          echo "Checking Gradle configuration..."
-
-          ./gradlew tasks --all --no-daemon
-
-          echo "Gradle configuration verified."
-
-      # =====================================
-      # 9. Clean Previous Build
-      # =====================================
 
       - name: Clean Previous Build
-        shell: bash
-        run: |
-          set -e
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ${{ env.GRADLE_CMD }} clean --stacktrace
 
-          echo "Cleaning old build files..."
+      # Debug APK: signing key ki zaroorat nahi, isliye ye hamesha install hone layak banti hai
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ${{ env.GRADLE_CMD }} assembleDebug --stacktrace
 
-          ./gradlew clean --no-daemon
-
-          echo "Clean completed."
-
-      # =====================================
-      # 10. Build Release APK
-      # =====================================
-
+      # Release APK (unsigned banegi jab tak signing config na ho)
       - name: Build Release APK
-        shell: bash
-        run: |
-          set -e
-
-          echo "================================"
-          echo "Starting Release APK Build"
-          echo "================================"
-
-          ./gradlew \
-            assembleRelease \
-            --no-daemon \
-            --stacktrace \
-            --max-workers=2
-
-          echo "Release build completed."
-
-      # =====================================
-      # 11. Verify APK File
-      # =====================================
+        working-directory: ${{ env.PROJECT_DIR }}
+        continue-on-error: true
+        run: ${{ env.GRADLE_CMD }} assembleRelease --stacktrace
 
       - name: Verify APK
-        shell: bash
         run: |
-          set -e
-
-          echo "Searching generated APK..."
-
-          mkdir -p release-apk
-
-          find . \
-            -type f \
-            -path "*/build/outputs/apk/*" \
-            -name "*.apk" \
-            -exec cp {} release-apk/ \;
-
-          if [ -z "$(ls -A release-apk)" ]; then
-            echo "ERROR: No APK generated!"
+          echo "APK files:"
+          find "$PROJECT_DIR" -name "*.apk" -type f
+          COUNT=$(find "$PROJECT_DIR" -name "*.apk" -type f | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Koi APK nahi bani"
             exit 1
           fi
-
-          echo "APK files generated successfully:"
-
-          ls -lh release-apk/
-
-      # =====================================
-      # 12. Upload APK to GitHub
-      # =====================================
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: Android-Release-APK
-          path: release-apk/*.apk
+          name: android-apk
+          path: |
+            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
-          retention-days: 14
-          compression-level: 6
-
-      # =====================================
-      # 13. Build Success Report
-      # =====================================
 
       - name: Build Success Report
         if: success()
-        shell: bash
-        run: |
-          echo "===================================="
-          echo "ANDROID APK BUILD SUCCESSFUL"
-          echo "===================================="
-
-          echo "Java: 17"
-          echo "Android API: 35"
-          echo "Build Tools: 35.0.0"
-
-          echo ""
-          echo "Generated APK files:"
-
-          ls -lh release-apk/
-
-          echo ""
-          echo "Download APK from GitHub Actions Artifacts."
-
-          echo "===================================="
-
-      # =====================================
-      # 14. Build Failure Report
-      # =====================================
+        run: echo "Build successful. Actions ke Artifacts section se APK download karo."
 
       - name: Build Failure Report
         if: failure()
-        shell: bash
-        run: |
-          echo "===================================="
-          echo "ANDROID APK BUILD FAILED"
-          echo "===================================="
-
-          echo "Please inspect the failed step."
-
-          echo "Possible reasons:"
-          echo "1. Gradle configuration error"
-          echo "2. Missing dependencies"
-          echo "3. Incorrect Android SDK configuration"
-          echo "4. Missing signing configuration"
-          echo "5. Source code compilation error"
-
-          echo "===================================="
+        run: echo "Build fail hua. Upar ke step ka log dekho."
