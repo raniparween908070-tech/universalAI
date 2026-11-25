@@ -13,268 +13,269 @@ permissions:
 
 concurrency:
   group: android-apk-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
-      JAVA_VERSION: '17'
       ANDROID_API_LEVEL: '35'
       ANDROID_BUILD_TOOLS: '35.0.0'
 
     steps:
 
-      # --------------------------------
-      # STEP 1: Checkout Repository
-      # --------------------------------
+      # =====================================
+      # 1. Checkout GitHub Repository
+      # =====================================
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # --------------------------------
-      # STEP 2: Setup Java JDK 17
-      # --------------------------------
+      # =====================================
+      # 2. Setup Java JDK 17
+      # =====================================
 
       - name: Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      # --------------------------------
-      # STEP 3: Setup Android SDK
-      # --------------------------------
+      # =====================================
+      # 3. Setup Android SDK (FIXED VERSION)
+      # =====================================
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      # --------------------------------
-      # STEP 4: Accept Android Licenses
-      # --------------------------------
+      # =====================================
+      # 4. Verify Android SDK
+      # =====================================
 
-      - name: Accept Android SDK Licenses
-        shell: bash
-        run: |
-          set +e
-          yes | sdkmanager --licenses
-          LICENSE_STATUS=$?
-          set -e
-
-          echo "Android SDK license process completed."
-
-      # --------------------------------
-      # STEP 5: Install Android SDK Packages
-      # --------------------------------
-
-      - name: Install Android SDK Packages
+      - name: Verify Android SDK
         shell: bash
         run: |
           set -e
 
           echo "Checking Android SDK..."
 
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
           sdkmanager --version
+          adb version
 
-          echo "Updating SDK package information..."
+          echo "Android SDK is working."
 
-          sdkmanager --update
+      # =====================================
+      # 5. Install Required SDK Packages
+      # =====================================
 
-          install_package() {
-            PACKAGE="$1"
-            SUCCESS=false
-
-            for ATTEMPT in 1 2 3 4 5
-            do
-              echo "Installing $PACKAGE"
-              echo "Attempt: $ATTEMPT of 5"
-
-              if sdkmanager --install "$PACKAGE"; then
-                SUCCESS=true
-                break
-              fi
-
-              echo "Installation failed. Retrying..."
-              sleep 10
-            done
-
-            if [ "$SUCCESS" != "true" ]; then
-              echo "ERROR: Could not install $PACKAGE"
-              exit 1
-            fi
-          }
-
-          install_package "platform-tools"
-          install_package "platforms;android-35"
-          install_package "build-tools;35.0.0"
-
-          echo "Verifying Android SDK packages..."
-
-          sdkmanager --list_installed
-
-          echo "Android SDK setup successful!"
-
-      # --------------------------------
-      # STEP 6: Configure Environment
-      # --------------------------------
-
-      - name: Configure Android Environment
-        shell: bash
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-
-          echo "Android environment configured."
-
-      # --------------------------------
-      # STEP 7: Check Gradle Project
-      # --------------------------------
-
-      - name: Check Gradle Project
+      - name: Install Required Android Packages
         shell: bash
         run: |
           set -e
 
+          echo "Installing Android SDK packages..."
+
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "platform-tools"
+
+          echo "Verifying installed packages..."
+
+          sdkmanager --list_installed
+
+          echo "All required SDK packages installed."
+
+      # =====================================
+      # 6. Verify Android Licenses
+      # =====================================
+
+      - name: Verify Android Licenses
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking Android SDK licenses..."
+
+          sdkmanager --licenses
+
+          echo "Android licenses verified."
+
+      # =====================================
+      # 7. Check Project Files
+      # =====================================
+
+      - name: Check Android Project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking project structure..."
+
           if [ ! -f "gradlew" ]; then
             echo "ERROR: gradlew file not found!"
-            echo "This repository must contain a Gradle Android project."
+            exit 1
+          fi
+
+          if [ ! -f "settings.gradle" ] && \
+             [ ! -f "settings.gradle.kts" ]; then
+            echo "ERROR: Gradle settings file not found!"
             exit 1
           fi
 
           chmod +x gradlew
 
-          echo "Gradle wrapper found."
+          echo "Project files verified."
 
           java -version
           ./gradlew --version
 
-      # --------------------------------
-      # STEP 8: Check Android Modules
-      # --------------------------------
+      # =====================================
+      # 8. Check Android Build Configuration
+      # =====================================
 
-      - name: Check Android Modules
+      - name: Check Gradle Configuration
         shell: bash
         run: |
           set -e
 
-          echo "Checking available Gradle tasks..."
+          echo "Checking Gradle configuration..."
 
-          ./gradlew tasks --all
+          ./gradlew tasks --all --no-daemon
 
-      # --------------------------------
-      # STEP 9: Clean Previous Build
-      # --------------------------------
+          echo "Gradle configuration verified."
+
+      # =====================================
+      # 9. Clean Previous Build
+      # =====================================
 
       - name: Clean Previous Build
         shell: bash
         run: |
           set -e
 
-          ./gradlew --no-daemon clean
+          echo "Cleaning old build files..."
 
-          echo "Previous build cleaned."
+          ./gradlew clean --no-daemon
 
-      # --------------------------------
-      # STEP 10: Build Release APK
-      # --------------------------------
+          echo "Clean completed."
+
+      # =====================================
+      # 10. Build Release APK
+      # =====================================
 
       - name: Build Release APK
         shell: bash
         run: |
           set -e
 
-          echo "Starting Android Release APK build..."
+          echo "================================"
+          echo "Starting Release APK Build"
+          echo "================================"
 
           ./gradlew \
+            assembleRelease \
             --no-daemon \
             --stacktrace \
-            --max-workers=2 \
-            assembleRelease
+            --max-workers=2
 
-          echo "Release APK build completed."
+          echo "Release build completed."
 
-      # --------------------------------
-      # STEP 11: Verify APK
-      # --------------------------------
+      # =====================================
+      # 11. Verify APK File
+      # =====================================
 
-      - name: Verify Generated APK
+      - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          echo "Searching for generated APK..."
+          echo "Searching generated APK..."
 
-          find . -type f -name "*.apk" \
+          mkdir -p release-apk
+
+          find . \
+            -type f \
             -path "*/build/outputs/apk/*" \
-            -print
+            -name "*.apk" \
+            -exec cp {} release-apk/ \;
 
-          APK_COUNT=$(find . -type f -name "*.apk" \
-            -path "*/build/outputs/apk/*" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: APK file was not generated!"
+          if [ -z "$(ls -A release-apk)" ]; then
+            echo "ERROR: No APK generated!"
             exit 1
           fi
 
-          echo "APK generated successfully!"
-          echo "Total APK files: $APK_COUNT"
+          echo "APK files generated successfully:"
 
-      # --------------------------------
-      # STEP 12: Upload APK Artifact
-      # --------------------------------
+          ls -lh release-apk/
 
-      - name: Upload Release APK
+      # =====================================
+      # 12. Upload APK to GitHub
+      # =====================================
+
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: Android-Release-APK
-          path: |
-            **/build/outputs/apk/**/*.apk
+          path: release-apk/*.apk
           if-no-files-found: error
-          compression-level: 6
           retention-days: 14
+          compression-level: 6
 
-      # --------------------------------
-      # STEP 13: Build Summary
-      # --------------------------------
+      # =====================================
+      # 13. Build Success Report
+      # =====================================
 
-      - name: Build Summary
+      - name: Build Success Report
         if: success()
         shell: bash
         run: |
-          echo "=================================="
+          echo "===================================="
           echo "ANDROID APK BUILD SUCCESSFUL"
-          echo "=================================="
-          echo ""
-          echo "Java Version: 17"
+          echo "===================================="
+
+          echo "Java: 17"
           echo "Android API: 35"
           echo "Build Tools: 35.0.0"
-          echo ""
-          echo "APK is available in GitHub Actions Artifacts."
-          echo ""
-          echo "=================================="
 
-      # --------------------------------
-      # STEP 14: Failure Information
-      # --------------------------------
+          echo ""
+          echo "Generated APK files:"
 
-      - name: Build Failure Information
+          ls -lh release-apk/
+
+          echo ""
+          echo "Download APK from GitHub Actions Artifacts."
+
+          echo "===================================="
+
+      # =====================================
+      # 14. Build Failure Report
+      # =====================================
+
+      - name: Build Failure Report
         if: failure()
         shell: bash
         run: |
-          echo "=================================="
+          echo "===================================="
           echo "ANDROID APK BUILD FAILED"
-          echo "=================================="
-          echo ""
-          echo "Please check the failed step above."
-          echo "Possible issues:"
-          echo "1. Android SDK installation"
-          echo "2. Gradle configuration"
-          echo "3. Missing dependencies"
-          echo "4. Android project configuration"
-          echo ""
-          echo "=================================="
+          echo "===================================="
+
+          echo "Please inspect the failed step."
+
+          echo "Possible reasons:"
+          echo "1. Gradle configuration error"
+          echo "2. Missing dependencies"
+          echo "3. Incorrect Android SDK configuration"
+          echo "4. Missing signing configuration"
+          echo "5. Source code compilation error"
+
+          echo "===================================="
