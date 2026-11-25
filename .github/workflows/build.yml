@@ -21,45 +21,56 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK packages
-        run: |
-          mkdir -p "$ANDROID_HOME/cmdline-tools"
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
-          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-          rm -f cmdline-tools.zip
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-
-      - name: Create Android project and decode signing key
+      - name: Create Android project, Gradle wrapper, and signing key
         run: |
-          mkdir -p app/src/main/java/com/universal/ai app/keystore
+          mkdir -p app/src/main/java/com/universal/ai app/keystore gradle/wrapper
           echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 -d > app/keystore/release.keystore
 
+          cat << 'EOF' > gradle/wrapper/gradle-wrapper.properties
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+          curl -fsSL https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradlew -o gradlew
+          curl -fsSL https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+          chmod +x gradlew
+
           cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
           rootProject.name = "UniversalAI"
           include ':app'
           EOF
 
           cat << 'EOF' > build.gradle
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
-              }
-          }
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
           }
           EOF
 
@@ -75,12 +86,12 @@ jobs:
 
           android {
               namespace "com.universal.ai"
-              compileSdk 34
+              compileSdk 35
 
               defaultConfig {
                   applicationId "com.universal.ai"
                   minSdk 23
-                  targetSdk 34
+                  targetSdk 35
                   versionCode 1
                   versionName "1.0"
               }
@@ -100,10 +111,11 @@ jobs:
                       minifyEnabled false
                   }
               }
-          }
 
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
           }
           EOF
 
@@ -114,7 +126,7 @@ jobs:
               <application
                   android:label="Universal AI"
                   android:usesCleartextTraffic="true"
-                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
@@ -130,13 +142,13 @@ jobs:
           cat << 'EOF' > app/src/main/java/com/universal/ai/MainActivity.java
           package com.universal.ai;
 
+          import android.app.Activity;
           import android.os.Bundle;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
-          import androidx.appcompat.app.AppCompatActivity;
 
-          public class MainActivity extends AppCompatActivity {
+          public class MainActivity extends Activity {
               private WebView webView;
 
               @Override
@@ -168,11 +180,10 @@ jobs:
 
       - name: Build Signed Release APK
         run: |
-          gradle assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
         with:
           name: UniversalAI-Signed-Release-APK
           path: app/build/outputs/apk/release/app-release.apk
-          
